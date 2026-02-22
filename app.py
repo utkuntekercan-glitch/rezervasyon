@@ -354,12 +354,16 @@ init_db(conn)
 today = date.today()
 
 with st.sidebar:
-    page = st.radio("Menu", ["Dashboard", "Yeni Rezervasyon", "Rezervasyon Listesi"])
+    page = st.radio("Menu", ["Dashboard", "Yeni Rezervasyon", "Rezervasyon Listesi"], key="page_ui")
     selected_day = st.date_input("Tarih", value=today)
 
 
 if page == "Dashboard":
     st.subheader(f"{selected_day.isoformat()} Ozeti")
+    if st.button("➕ Rezervasyon Ekle", type="primary"):
+        st.session_state.page_ui = "Yeni Rezervasyon"
+        st.rerun()
+
     rows = df_query(
         conn,
         """
