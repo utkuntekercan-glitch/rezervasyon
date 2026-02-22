@@ -356,6 +356,10 @@ MENU_OPTIONS = ["Dashboard", "Yeni Rezervasyon", "Rezervasyon Listesi"]
 
 if "page_ui" not in st.session_state:
     st.session_state.page_ui = "Dashboard"
+if "menu_radio" not in st.session_state:
+    st.session_state.menu_radio = st.session_state.page_ui
+if st.session_state.menu_radio != st.session_state.page_ui:
+    st.session_state.menu_radio = st.session_state.page_ui
 
 with st.sidebar:
     current_page = st.session_state.get("page_ui", "Dashboard")
@@ -376,6 +380,7 @@ if page == "Dashboard":
     st.subheader(f"{selected_day.isoformat()} Ozeti")
     if st.button("➕ Rezervasyon Ekle", type="primary"):
         st.session_state.page_ui = "Yeni Rezervasyon"
+        st.session_state.menu_radio = "Yeni Rezervasyon"
         st.rerun()
 
     rows = df_query(
@@ -426,21 +431,21 @@ if page == "Dashboard":
             rid = int(r[id_col]) if id_col else None
             if rid is None:
                 continue
-
             with st.container(border=True):
                 top_left, top_right = st.columns([6.8, 2.2], vertical_alignment="center")
                 with top_left:
                     st.markdown(
                         f"**{str(r[musteri_col]) if musteri_col else '-'}**  \n"
-                        f"🕒 {str(r[bas_col]) if bas_col else '-'} - {str(r[bit_col]) if bit_col else '-'}  |  "
-                        f"🖥️ {str(r[pcs_col]) if pcs_col else '-'}  |  "
+                        f"Saat: {str(r[bas_col]) if bas_col else '-'} - {str(r[bit_col]) if bit_col else '-'}  |  "
+                        f"PC: {str(r[pcs_col]) if pcs_col else '-'}  |  "
                         f"{str(r[durum_col]) if durum_col else '-'}"
                     )
                 with top_right:
                     edit_col, del_col = st.columns(2)
                     with edit_col:
-                        if st.button("Düzenle", key=f"dash_edit_{rid}", use_container_width=True):
+                        if st.button("Duzenle", key=f"dash_edit_{rid}", use_container_width=True):
                             st.session_state.page_ui = "Rezervasyon Listesi"
+                            st.session_state.menu_radio = "Rezervasyon Listesi"
                             st.session_state.edit_reservation_id = rid
                             st.rerun()
                     with del_col:
