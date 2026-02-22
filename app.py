@@ -5,10 +5,15 @@ import os
 
 import pandas as pd
 import streamlit as st
+try:
+    import psycopg2
+except Exception:
+    psycopg2 = None
 
 st.set_page_config(page_title="Old School Rezervasyon", layout="wide")
 
 DB_PATH = Path("oldschool_reservation.db")
+DATABASE_URL = str(st.secrets.get("DATABASE_URL", os.getenv("DATABASE_URL", ""))).strip()
 APP_USER = str(st.secrets.get("APP_USER", os.getenv("APP_USER", "admin"))).strip()
 APP_PASSWORD = str(st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", "123456")))
 AREA_LAYOUT = [
@@ -20,17 +25,50 @@ AREA_LAYOUT = [
 ]
 
 
+class DBConn:
+    def __init__(self, driver: str, raw_conn):
+        self.driver = driver
+        self._conn = raw_conn
+
+    def _sql(self, q: str) -> str:
+        if self.driver == "postgres":
+            return q.replace("?", "%s")
+        return q
+
+    def execute(self, q: str, params=()):
+        cur = self._conn.cursor()
+        cur.execute(self._sql(q), tuple(params))
+        return cur
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
 def get_conn():
+    if DATABASE_URL:
+        if psycopg2 is None:
+            raise RuntimeError("Postgres icin psycopg2-binary gerekli. requirements'e ekleyip deploy et.")
+        if "sslmode=" in DATABASE_URL:
+            raw = psycopg2.connect(DATABASE_URL)
+        else:
+            raw = psycopg2.connect(DATABASE_URL, sslmode="require")
+        raw.autocommit = False
+        return DBConn("postgres", raw)
+
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
+    return DBConn("sqlite", conn)
 
 
-def init_db(conn: sqlite3.Connection):
+def init_db(conn: DBConn):
+    id_col = "BIGSERIAL PRIMARY KEY" if conn.driver == "postgres" else "INTEGER PRIMARY KEY AUTOINCREMENT"
     conn.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS reservation (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {id_col},
             d TEXT NOT NULL,
             start_time TEXT NOT NULL,
             end_time TEXT NOT NULL,
@@ -49,7 +87,10 @@ def init_db(conn: sqlite3.Connection):
 
 
 def df_query(conn, q, params=()):
-    return pd.read_sql_query(q, conn, params=params)
+    cur = conn.execute(q, params)
+    rows = cur.fetchall()
+    cols = [c[0] for c in cur.description] if cur.description else []
+    return pd.DataFrame(rows, columns=cols)
 
 
 def status_badge(s: str) -> str:
@@ -98,7 +139,7 @@ def normalize_pc_list(raw: str | None) -> list[str]:
     return sorted(parts)
 
 
-def collect_occupied_pcs(conn: sqlite3.Connection, d_str: str, start_time: str, end_time: str, exclude_id: int | None = None) -> set[str]:
+def collect_occupied_pcs(conn: DBConn, d_str: str, start_time: str, end_time: str, exclude_id: int | None = None) -> set[str]:
     q = """
         SELECT id, table_no
         FROM reservation
