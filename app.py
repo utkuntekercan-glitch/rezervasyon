@@ -8,6 +8,13 @@ import streamlit as st
 st.set_page_config(page_title="Old School Rezervasyon", layout="wide")
 
 DB_PATH = Path("oldschool_reservation.db")
+AREA_LAYOUT = [
+    ("Yellow Area", "Y", 32),
+    ("EF Area", "EF", 10),
+    ("Red Area", "R", 10),
+    ("VIP", "VIP", 5),
+    ("Blue Area", "B", 10),
+]
 
 
 def get_conn():
@@ -53,6 +60,64 @@ def status_badge(s: str) -> str:
     return s
 
 
+def normalize_pc_list(raw: str | None) -> list[str]:
+    if raw is None:
+        return []
+    parts = [p.strip() for p in str(raw).split(",") if p.strip()]
+    # Backward compatibility for old single text values
+    if len(parts) == 1 and "-" not in parts[0]:
+        return parts
+    return sorted(parts)
+
+
+def collect_occupied_pcs(conn: sqlite3.Connection, d_str: str, start_time: str, end_time: str, exclude_id: int | None = None) -> set[str]:
+    q = """
+        SELECT id, table_no
+        FROM reservation
+        WHERE d = ?
+          AND status != 'iptal'
+          AND NOT (end_time <= ? OR start_time >= ?)
+    """
+    params = [d_str, start_time, end_time]
+    if exclude_id is not None:
+        q += " AND id != ?"
+        params.append(int(exclude_id))
+
+    rows = conn.execute(q, tuple(params)).fetchall()
+    occ: set[str] = set()
+    for _, pcs in rows:
+        for p in normalize_pc_list(pcs):
+            occ.add(p)
+    return occ
+
+
+def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str] | None = None) -> list[str]:
+    preselected = preselected or []
+    selected: list[str] = []
+    st.markdown("#### Bilgisayar Secimi")
+    st.caption("Dolu bilgisayarlar kilitli gorunur. Rezervasyon icin en az 1 bilgisayar sec.")
+
+    for area_name, area_code, count in AREA_LAYOUT:
+        st.markdown(f"**{area_name}** ({count})")
+        cols = st.columns(8)
+        for i in range(1, count + 1):
+            pc_id = f"{area_code}-{i:02d}"
+            default_val = pc_id in preselected
+            disabled = (pc_id in occupied) and (pc_id not in preselected)
+            col = cols[(i - 1) % 8]
+            with col:
+                val = st.checkbox(
+                    pc_id,
+                    value=default_val,
+                    key=f"{key_prefix}_{pc_id}",
+                    disabled=disabled,
+                )
+            if val:
+                selected.append(pc_id)
+        st.write("")
+    return sorted(selected)
+
+
 st.title("Old School Rezervasyon Yonetimi")
 
 conn = get_conn()
@@ -89,7 +154,7 @@ if page == "Dashboard":
         """
         SELECT id, d AS Tarih, start_time AS Baslangic, end_time AS Bitis,
                customer_name AS Musteri, phone AS Telefon, people_count AS Kisi,
-               table_no AS Masa, status AS Durum, note AS Notlar
+               table_no AS Bilgisayarlar, status AS Durum, note AS Notlar
         FROM reservation
         WHERE d = ?
         ORDER BY start_time
@@ -111,16 +176,22 @@ elif page == "Yeni Rezervasyon":
         end_time = c2.text_input("Bitis (HH:MM)", value="21:00")
         customer_name = st.text_input("Musteri Adi", value="")
         phone = st.text_input("Telefon", value="")
-        c3, c4, c5 = st.columns(3)
-        people_count = c3.number_input("Kisi Sayisi", min_value=1, max_value=50, value=2, step=1)
-        table_no = c4.text_input("Masa No", value="")
-        status = c5.selectbox("Durum", ["onayli", "beklemede", "iptal"], index=0)
-        note = st.text_input("Not", value="")
+        c3, c4 = st.columns(2)
+        status = c3.selectbox("Durum", ["onayli", "beklemede", "iptal"], index=0)
+        note = c4.text_input("Not", value="")
+
+        occupied = collect_occupied_pcs(conn, d.isoformat(), start_time.strip(), end_time.strip())
+        selected_pcs = render_pc_picker("new_pc", occupied, preselected=[])
+        st.caption(f"Secilen bilgisayar sayisi: {len(selected_pcs)}")
         submitted = st.form_submit_button("Rezervasyon Ekle", type="primary")
 
     if submitted:
         if not customer_name.strip():
             st.warning("Musteri adi zorunlu.")
+        elif len(selected_pcs) == 0:
+            st.warning("En az 1 bilgisayar secmelisin.")
+        elif start_time.strip() >= end_time.strip():
+            st.warning("Bitis saati baslangictan sonra olmali.")
         else:
             conn.execute(
                 """
@@ -134,8 +205,8 @@ elif page == "Yeni Rezervasyon":
                     end_time.strip(),
                     customer_name.strip(),
                     phone.strip() or None,
-                    int(people_count),
-                    table_no.strip() or None,
+                    int(len(selected_pcs)),
+                    ", ".join(selected_pcs),
                     status,
                     note.strip() or None,
                     datetime.now().isoformat(timespec="seconds"),
@@ -174,7 +245,7 @@ elif page == "Rezervasyon Listesi":
                 "customer_name": "Musteri",
                 "phone": "Telefon",
                 "people_count": "Kisi",
-                "table_no": "Masa",
+                "table_no": "Bilgisayarlar",
                 "status": "Durum",
                 "note": "Notlar",
             }
@@ -194,38 +265,49 @@ elif page == "Rezervasyon Listesi":
             eet = c2.text_input("Bitis (HH:MM)", value=str(row["end_time"]))
             ename = st.text_input("Musteri Adi", value=str(row["customer_name"]))
             ephone = st.text_input("Telefon", value="" if pd.isna(row["phone"]) else str(row["phone"]))
-            c3, c4, c5 = st.columns(3)
-            epeople = c3.number_input("Kisi Sayisi", min_value=1, max_value=50, value=int(row["people_count"]), step=1)
-            etable = c4.text_input("Masa No", value="" if pd.isna(row["table_no"]) else str(row["table_no"]))
-            estatus = c5.selectbox("Durum", ["onayli", "beklemede", "iptal"], index=["onayli", "beklemede", "iptal"].index(str(row["status"])))
+            estatus = st.selectbox("Durum", ["onayli", "beklemede", "iptal"], index=["onayli", "beklemede", "iptal"].index(str(row["status"])))
             enote = st.text_input("Not", value="" if pd.isna(row["note"]) else str(row["note"]))
+
+            occupied_edit = collect_occupied_pcs(
+                conn, ed.isoformat(), est.strip(), eet.strip(), exclude_id=int(picked_id)
+            )
+            preselected = normalize_pc_list(None if pd.isna(row["table_no"]) else str(row["table_no"]))
+            eselected_pcs = render_pc_picker(f"edit_{picked_id}", occupied_edit, preselected=preselected)
+            st.caption(f"Secilen bilgisayar sayisi: {len(eselected_pcs)}")
             b1, b2 = st.columns(2)
             save = b1.form_submit_button("Guncelle", type="primary")
             cancel = b2.form_submit_button("Iptal Olarak Isaretle")
 
         if save:
-            conn.execute(
-                """
-                UPDATE reservation
-                SET d=?, start_time=?, end_time=?, customer_name=?, phone=?, people_count=?, table_no=?, status=?, note=?
-                WHERE id=?
-                """,
-                (
-                    ed.isoformat(),
-                    est.strip(),
-                    eet.strip(),
-                    ename.strip(),
-                    ephone.strip() or None,
-                    int(epeople),
-                    etable.strip() or None,
-                    estatus,
-                    enote.strip() or None,
-                    int(picked_id),
-                ),
-            )
-            conn.commit()
-            st.success("Rezervasyon guncellendi.")
-            st.rerun()
+            if not ename.strip():
+                st.warning("Musteri adi zorunlu.")
+            elif len(eselected_pcs) == 0:
+                st.warning("En az 1 bilgisayar secmelisin.")
+            elif est.strip() >= eet.strip():
+                st.warning("Bitis saati baslangictan sonra olmali.")
+            else:
+                conn.execute(
+                    """
+                    UPDATE reservation
+                    SET d=?, start_time=?, end_time=?, customer_name=?, phone=?, people_count=?, table_no=?, status=?, note=?
+                    WHERE id=?
+                    """,
+                    (
+                        ed.isoformat(),
+                        est.strip(),
+                        eet.strip(),
+                        ename.strip(),
+                        ephone.strip() or None,
+                        int(len(eselected_pcs)),
+                        ", ".join(eselected_pcs),
+                        estatus,
+                        enote.strip() or None,
+                        int(picked_id),
+                    ),
+                )
+                conn.commit()
+                st.success("Rezervasyon guncellendi.")
+                st.rerun()
 
         if cancel:
             conn.execute("UPDATE reservation SET status='iptal' WHERE id=?", (int(picked_id),))
