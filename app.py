@@ -352,10 +352,24 @@ conn = get_conn()
 init_db(conn)
 
 today = date.today()
+MENU_OPTIONS = ["Dashboard", "Yeni Rezervasyon", "Rezervasyon Listesi"]
+
+if "page_ui" not in st.session_state:
+    st.session_state.page_ui = "Dashboard"
 
 with st.sidebar:
-    page = st.radio("Menu", ["Dashboard", "Yeni Rezervasyon", "Rezervasyon Listesi"], key="page_ui")
+    current_page = st.session_state.get("page_ui", "Dashboard")
+    page_pick = st.radio(
+        "Menu",
+        MENU_OPTIONS,
+        index=MENU_OPTIONS.index(current_page) if current_page in MENU_OPTIONS else 0,
+        key="menu_radio",
+    )
+    if page_pick != current_page:
+        st.session_state.page_ui = page_pick
     selected_day = st.date_input("Tarih", value=today)
+
+page = st.session_state.get("page_ui", "Dashboard")
 
 
 if page == "Dashboard":
