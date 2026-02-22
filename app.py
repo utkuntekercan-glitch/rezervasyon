@@ -2,6 +2,7 @@ import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import os
+import hashlib
 
 import pandas as pd
 import streamlit as st
@@ -151,6 +152,10 @@ def get_conn():
     return DBConn("sqlite", conn)
 
 
+def hash_password(raw: str) -> str:
+    return hashlib.sha256(str(raw).encode("utf-8")).hexdigest()
+
+
 def init_db(conn: DBConn):
     id_col = "BIGSERIAL PRIMARY KEY" if conn.driver == "postgres" else "INTEGER PRIMARY KEY AUTOINCREMENT"
     conn.execute(
@@ -166,11 +171,55 @@ def init_db(conn: DBConn):
             table_no TEXT,
             status TEXT NOT NULL DEFAULT 'onayli',
             note TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            created_by TEXT
         );
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_reservation_d ON reservation(d);")
+
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS app_user (
+            id {id_col},
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+
+    has_created_by = False
+    if conn.driver == "postgres":
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'reservation'
+              AND column_name = 'created_by'
+            """
+        ).fetchone()
+        has_created_by = row is not None
+    else:
+        cols = conn.execute("PRAGMA table_info(reservation);").fetchall()
+        has_created_by = any(str(c[1]).lower() == "created_by" for c in cols)
+
+    if not has_created_by:
+        conn.execute("ALTER TABLE reservation ADD COLUMN created_by TEXT;")
+
+    admin_exists = conn.execute("SELECT id FROM app_user WHERE username=?", (APP_USER,)).fetchone()
+    if not admin_exists:
+        conn.execute(
+            "INSERT INTO app_user(username, password_hash, role, created_at) VALUES(?,?,?,?)",
+            (
+                APP_USER,
+                hash_password(APP_PASSWORD),
+                "admin",
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
     conn.commit()
 
 
@@ -202,11 +251,15 @@ def status_badge(s: str) -> str:
     return s
 
 
-def check_login() -> bool:
+def check_login(conn: DBConn) -> bool:
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
     if st.session_state.authenticated:
+        if "username" not in st.session_state:
+            st.session_state.username = APP_USER
+        if "role" not in st.session_state:
+            st.session_state.role = "admin"
         return True
 
     st.title("Old School Rezervasyon Yonetimi")
@@ -219,8 +272,14 @@ def check_login() -> bool:
     st.caption("Varsayilan kullanici: admin | Varsayilan parola: 123456")
 
     if submitted:
-        if username.strip() == APP_USER and password == APP_PASSWORD:
+        row = conn.execute(
+            "SELECT username, password_hash, role FROM app_user WHERE username=?",
+            (username.strip(),),
+        ).fetchone()
+        if row and hash_password(password) == str(row[1]):
             st.session_state.authenticated = True
+            st.session_state.username = str(row[0])
+            st.session_state.role = str(row[2]).lower()
             st.rerun()
         else:
             st.error("Hatali kullanici adi veya sifre")
@@ -343,18 +402,22 @@ def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str]
     return sorted(selected)
 
 
-if not check_login():
+conn = get_conn()
+init_db(conn)
+
+if not check_login(conn):
     st.stop()
 
 st.title("Old School Rezervasyon Yonetimi")
 
-conn = get_conn()
-init_db(conn)
-
 today = date.today()
 MENU_OPTIONS = ["Dashboard", "Yeni Rezervasyon", "Rezervasyon Listesi"]
+if str(st.session_state.get("role", "")).lower() == "admin":
+    MENU_OPTIONS.append("Kullanici Yonetimi")
 
 if "page_ui" not in st.session_state:
+    st.session_state.page_ui = "Dashboard"
+if st.session_state.page_ui not in MENU_OPTIONS:
     st.session_state.page_ui = "Dashboard"
 
 with st.sidebar:
@@ -373,7 +436,7 @@ page = st.session_state.get("page_ui", "Dashboard")
 
 if page == "Dashboard":
     st.subheader(f"{selected_day.isoformat()} Ozeti")
-    if st.button("➕ Rezervasyon Ekle", type="primary"):
+    if st.button("Rezervasyon Ekle", type="primary"):
         st.session_state.page_ui = "Yeni Rezervasyon"
         st.rerun()
 
@@ -399,7 +462,8 @@ if page == "Dashboard":
         """
         SELECT id, d AS "Tarih", start_time AS "Baslangic", end_time AS "Bitis",
                customer_name AS "Musteri", phone AS "Telefon", people_count AS "Kisi",
-               table_no AS "Bilgisayarlar", status AS "Durum", note AS "Notlar"
+               table_no AS "Bilgisayarlar", status AS "Durum", note AS "Notlar",
+               COALESCE(created_by, '-') AS "Olusturan"
         FROM reservation
         WHERE d = ?
         ORDER BY start_time
@@ -419,6 +483,7 @@ if page == "Dashboard":
         musteri_col = col_name(day_list, "Musteri")
         pcs_col = col_name(day_list, "Bilgisayarlar")
         durum_col = col_name(day_list, "Durum")
+        olusturan_col = col_name(day_list, "Olusturan")
 
         st.markdown("### Düzenle")
         for _, r in day_list.iterrows():
@@ -432,7 +497,8 @@ if page == "Dashboard":
                         f"**{str(r[musteri_col]) if musteri_col else '-'}**  \n"
                         f"Saat: {str(r[bas_col]) if bas_col else '-'} - {str(r[bit_col]) if bit_col else '-'}  |  "
                         f"PC: {str(r[pcs_col]) if pcs_col else '-'}  |  "
-                        f"{str(r[durum_col]) if durum_col else '-'}"
+                        f"{str(r[durum_col]) if durum_col else '-'}  |  "
+                        f"Olusturan: {str(r[olusturan_col]) if olusturan_col else '-'}"
                     )
                 with top_right:
                     edit_col, del_col = st.columns(2)
@@ -492,8 +558,8 @@ elif page == "Yeni Rezervasyon":
             conn.execute(
                 """
                 INSERT INTO reservation(
-                    d, start_time, end_time, customer_name, phone, people_count, table_no, status, note, created_at
-                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                    d, start_time, end_time, customer_name, phone, people_count, table_no, status, note, created_at, created_by
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     d.isoformat(),
@@ -506,6 +572,7 @@ elif page == "Yeni Rezervasyon":
                     status,
                     note.strip() or None,
                     datetime.now().isoformat(timespec="seconds"),
+                    str(st.session_state.get("username", "")).strip() or None,
                 ),
             )
             conn.commit()
@@ -520,7 +587,7 @@ elif page == "Rezervasyon Listesi":
     rows = df_query(
         conn,
         """
-        SELECT id, d, start_time, end_time, customer_name, phone, people_count, table_no, status, note
+        SELECT id, d, start_time, end_time, customer_name, phone, people_count, table_no, status, note, created_by
         FROM reservation
         ORDER BY d DESC, start_time DESC
         """,
@@ -544,6 +611,7 @@ elif page == "Rezervasyon Listesi":
                 "table_no": "Bilgisayarlar",
                 "status": "Durum",
                 "note": "Notlar",
+                "created_by": "Olusturan",
             }
         )
         show["Durum"] = show["Durum"].apply(status_badge)
@@ -615,3 +683,50 @@ elif page == "Rezervasyon Listesi":
             st.rerun()
     else:
         st.info("Henuz rezervasyon kaydi yok.")
+
+elif page == "Kullanici Yonetimi":
+    if str(st.session_state.get("role", "")).lower() != "admin":
+        st.error("Bu sayfaya sadece admin erisebilir.")
+    else:
+        st.subheader("Kullanici Yonetimi")
+        users = df_query(
+            conn,
+            """
+            SELECT username AS "Kullanici", role AS "Rol", created_at AS "Olusturulma"
+            FROM app_user
+            ORDER BY username
+            """,
+        )
+        st.dataframe(users, use_container_width=True, hide_index=True)
+
+        st.markdown("### Yeni Kullanici Olustur")
+        with st.form("create_user_form"):
+            new_username = st.text_input("Kullanici Adi")
+            new_password = st.text_input("Gecici Sifre", type="password")
+            new_role = st.selectbox("Rol", ["user", "admin"], index=0)
+            create_user = st.form_submit_button("Kullanici Olustur", type="primary")
+
+        if create_user:
+            u = new_username.strip()
+            p = new_password.strip()
+            if len(u) < 3:
+                st.warning("Kullanici adi en az 3 karakter olmali.")
+            elif len(p) < 6:
+                st.warning("Sifre en az 6 karakter olmali.")
+            else:
+                exists = conn.execute("SELECT id FROM app_user WHERE username=?", (u,)).fetchone()
+                if exists:
+                    st.warning("Bu kullanici adi zaten var.")
+                else:
+                    conn.execute(
+                        "INSERT INTO app_user(username, password_hash, role, created_at) VALUES(?,?,?,?)",
+                        (
+                            u,
+                            hash_password(p),
+                            new_role,
+                            datetime.now().isoformat(timespec="seconds"),
+                        ),
+                    )
+                    conn.commit()
+                    st.success(f"Kullanici olusturuldu: {u}")
+                    st.rerun()
