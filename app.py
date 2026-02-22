@@ -398,6 +398,41 @@ if page == "Dashboard":
         if durum_col:
             day_list[durum_col] = day_list[durum_col].apply(status_badge)
         st.dataframe(day_list, use_container_width=True, hide_index=True)
+
+        id_col = col_name(day_list, "id")
+        tarih_col = col_name(day_list, "Tarih")
+        bas_col = col_name(day_list, "Baslangic")
+        bit_col = col_name(day_list, "Bitis")
+        musteri_col = col_name(day_list, "Musteri")
+        pcs_col = col_name(day_list, "Bilgisayarlar")
+        durum_col = col_name(day_list, "Durum")
+
+        st.markdown("### Hizli Islem")
+        for _, r in day_list.iterrows():
+            rid = int(r[id_col]) if id_col else None
+            if rid is None:
+                continue
+
+            left, b1, b2 = st.columns([6, 1.2, 1.2])
+            with left:
+                st.markdown(
+                    f"**{str(r[musteri_col]) if musteri_col else '-'}**  |  "
+                    f"{str(r[tarih_col]) if tarih_col else '-'} "
+                    f"{str(r[bas_col]) if bas_col else '-'} - {str(r[bit_col]) if bit_col else '-'}  |  "
+                    f"{str(r[pcs_col]) if pcs_col else '-'}  |  "
+                    f"{str(r[durum_col]) if durum_col else '-'}"
+                )
+            with b1:
+                if st.button("Düzenle", key=f"dash_edit_{rid}", use_container_width=True):
+                    st.session_state.page_ui = "Rezervasyon Listesi"
+                    st.session_state.edit_reservation_id = rid
+                    st.rerun()
+            with b2:
+                if st.button("Sil", key=f"dash_delete_{rid}", use_container_width=True):
+                    conn.execute("DELETE FROM reservation WHERE id=?", (rid,))
+                    conn.commit()
+                    st.success("Rezervasyon silindi.")
+                    st.rerun()
     else:
         st.info("Bu tarih icin rezervasyon yok.")
 
@@ -491,7 +526,10 @@ elif page == "Rezervasyon Listesi":
 
         st.divider()
         st.markdown("### Kayit Duzenle / Iptal")
-        picked_id = st.selectbox("Rezervasyon Sec", filtered["id"].tolist())
+        opts = filtered["id"].tolist()
+        desired = st.session_state.pop("edit_reservation_id", None)
+        idx = opts.index(desired) if desired in opts else 0
+        picked_id = st.selectbox("Rezervasyon Sec", opts, index=idx)
         row = filtered.loc[filtered["id"] == picked_id].iloc[0]
         with st.form("edit_reservation"):
             ed = st.date_input("Tarih", value=date.fromisoformat(str(row["d"])))
