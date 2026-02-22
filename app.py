@@ -99,6 +99,7 @@ DB_PATH = Path("oldschool_reservation.db")
 DATABASE_URL = str(st.secrets.get("DATABASE_URL", os.getenv("DATABASE_URL", ""))).strip()
 APP_USER = str(st.secrets.get("APP_USER", os.getenv("APP_USER", "admin"))).strip()
 APP_PASSWORD = str(st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", "123456")))
+UNKNOWN_END_LABEL = "belirsiz"
 AREA_LAYOUT = [
     ("Yellow Area", "Y", 32),
     ("EF Area", "EF", 10),
@@ -313,10 +314,16 @@ def parse_hhmm(t: str) -> tuple[int, int] | None:
 def reservation_bounds(d_str: str, start_time: str, end_time: str):
     d0 = date.fromisoformat(str(d_str))
     st = parse_hhmm(start_time)
-    et = parse_hhmm(end_time)
-    if st is None or et is None:
+    if st is None:
         return None
     start_dt = datetime(d0.year, d0.month, d0.day, st[0], st[1])
+    if str(end_time).strip().lower() == UNKNOWN_END_LABEL:
+        # Unknown end-time blocks this machine for up to 24 hours from start.
+        end_dt = start_dt + timedelta(days=1)
+        return start_dt, end_dt
+    et = parse_hhmm(end_time)
+    if et is None:
+        return None
     end_dt = datetime(d0.year, d0.month, d0.day, et[0], et[1])
     if end_dt <= start_dt:
         end_dt += timedelta(days=1)
@@ -535,14 +542,16 @@ elif page == "Yeni Rezervasyon":
         d = st.date_input("Tarih", value=selected_day)
         c1, c2 = st.columns(2)
         start_time = c1.text_input("Baslangic (HH:MM)", value="22:00")
-        end_time = c2.text_input("Bitis (HH:MM)", value="07:00")
+        end_unknown = c2.checkbox("Bitis belirsiz", value=False)
+        end_time = c2.text_input("Bitis (HH:MM)", value="07:00", disabled=end_unknown)
+        final_end_time = UNKNOWN_END_LABEL if end_unknown else end_time.strip()
         customer_name = st.text_input("Musteri Adi", value="")
         phone = st.text_input("Telefon", value="")
         c3, c4 = st.columns(2)
         status = c3.selectbox("Durum", ["onayli", "beklemede", "iptal"], index=0)
         note = c4.text_input("Not", value="")
 
-        occupied = collect_occupied_pcs(conn, d.isoformat(), start_time.strip(), end_time.strip())
+        occupied = collect_occupied_pcs(conn, d.isoformat(), start_time.strip(), final_end_time)
         selected_pcs = render_pc_picker("new_pc", occupied, preselected=[])
         st.caption(f"Secilen bilgisayar sayisi: {len(selected_pcs)}")
         submitted = st.form_submit_button("Rezervasyon Ekle", type="primary")
@@ -552,8 +561,8 @@ elif page == "Yeni Rezervasyon":
             st.warning("Musteri adi zorunlu.")
         elif len(selected_pcs) == 0:
             st.warning("En az 1 bilgisayar secmelisin.")
-        elif reservation_bounds(d.isoformat(), start_time.strip(), end_time.strip()) is None:
-            st.warning("Saat formati hatali. HH:MM (ornek 22:00) gir.")
+        elif reservation_bounds(d.isoformat(), start_time.strip(), final_end_time) is None:
+            st.warning("Saat formati hatali. HH:MM (ornek 22:00) gir ya da bitisi belirsiz sec.")
         else:
             conn.execute(
                 """
@@ -564,7 +573,7 @@ elif page == "Yeni Rezervasyon":
                 (
                     d.isoformat(),
                     start_time.strip(),
-                    end_time.strip(),
+                    final_end_time,
                     customer_name.strip(),
                     phone.strip() or None,
                     int(len(selected_pcs)),
@@ -629,14 +638,24 @@ elif page == "Rezervasyon Listesi":
             ed = st.date_input("Tarih", value=date.fromisoformat(str(row["d"])))
             c1, c2 = st.columns(2)
             est = c1.text_input("Baslangic (HH:MM)", value=str(row["start_time"]))
-            eet = c2.text_input("Bitis (HH:MM)", value=str(row["end_time"]))
+            row_end_time = "" if pd.isna(row["end_time"]) else str(row["end_time"])
+            end_unknown_edit = c2.checkbox(
+                "Bitis belirsiz",
+                value=row_end_time.strip().lower() == UNKNOWN_END_LABEL,
+            )
+            eet = c2.text_input(
+                "Bitis (HH:MM)",
+                value="07:00" if row_end_time.strip().lower() == UNKNOWN_END_LABEL else row_end_time,
+                disabled=end_unknown_edit,
+            )
+            final_edit_end = UNKNOWN_END_LABEL if end_unknown_edit else eet.strip()
             ename = st.text_input("Musteri Adi", value=str(row["customer_name"]))
             ephone = st.text_input("Telefon", value="" if pd.isna(row["phone"]) else str(row["phone"]))
             estatus = st.selectbox("Durum", ["onayli", "beklemede", "iptal"], index=["onayli", "beklemede", "iptal"].index(str(row["status"])))
             enote = st.text_input("Not", value="" if pd.isna(row["note"]) else str(row["note"]))
 
             occupied_edit = collect_occupied_pcs(
-                conn, ed.isoformat(), est.strip(), eet.strip(), exclude_id=int(picked_id)
+                conn, ed.isoformat(), est.strip(), final_edit_end, exclude_id=int(picked_id)
             )
             preselected = normalize_pc_list(None if pd.isna(row["table_no"]) else str(row["table_no"]))
             eselected_pcs = render_pc_picker(f"edit_{picked_id}", occupied_edit, preselected=preselected)
@@ -650,8 +669,8 @@ elif page == "Rezervasyon Listesi":
                 st.warning("Musteri adi zorunlu.")
             elif len(eselected_pcs) == 0:
                 st.warning("En az 1 bilgisayar secmelisin.")
-            elif reservation_bounds(ed.isoformat(), est.strip(), eet.strip()) is None:
-                st.warning("Saat formati hatali. HH:MM (ornek 22:00) gir.")
+            elif reservation_bounds(ed.isoformat(), est.strip(), final_edit_end) is None:
+                st.warning("Saat formati hatali. HH:MM (ornek 22:00) gir ya da bitisi belirsiz sec.")
             else:
                 conn.execute(
                     """
@@ -662,7 +681,7 @@ elif page == "Rezervasyon Listesi":
                     (
                         ed.isoformat(),
                         est.strip(),
-                        eet.strip(),
+                        final_edit_end,
                         ename.strip(),
                         ephone.strip() or None,
                         int(len(eselected_pcs)),
