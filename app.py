@@ -231,6 +231,11 @@ def df_query(conn, q, params=()):
     return pd.DataFrame(rows, columns=cols)
 
 
+@st.cache_data(show_spinner=False, ttl=60)
+def df_query_cached(_conn, q, params=(), rev=0):
+    return df_query(_conn, q, params)
+
+
 def col_name(df: pd.DataFrame, preferred: str) -> str | None:
     if preferred in df.columns:
         return preferred
@@ -334,6 +339,21 @@ def overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datet
     return a_start < b_end and b_start < a_end
 
 
+@st.cache_data(show_spinner=False, ttl=60)
+def reservation_rows_for_window(_conn, d_prev: str, d_str: str, d_next: str, exclude_id: int | None, rev: int):
+    q = """
+        SELECT id, d, start_time, end_time, table_no
+        FROM reservation
+        WHERE d IN (?, ?, ?)
+          AND status != 'iptal'
+    """
+    params: list[object] = [d_prev, d_str, d_next]
+    if exclude_id is not None:
+        q += " AND id != ?"
+        params.append(int(exclude_id))
+    return _conn.execute(q, tuple(params)).fetchall()
+
+
 def collect_occupied_pcs(conn: DBConn, d_str: str, start_time: str, end_time: str, exclude_id: int | None = None) -> set[str]:
     cand = reservation_bounds(d_str, start_time, end_time)
     if cand is None:
@@ -343,18 +363,8 @@ def collect_occupied_pcs(conn: DBConn, d_str: str, start_time: str, end_time: st
     d_prev = (d0 - timedelta(days=1)).isoformat()
     d_next = (d0 + timedelta(days=1)).isoformat()
 
-    q = """
-        SELECT id, d, start_time, end_time, table_no
-        FROM reservation
-        WHERE d IN (?, ?, ?)
-          AND status != 'iptal'
-    """
-    params = [d_prev, d_str, d_next]
-    if exclude_id is not None:
-        q += " AND id != ?"
-        params.append(int(exclude_id))
-
-    rows = conn.execute(q, tuple(params)).fetchall()
+    rev = int(st.session_state.get("db_rev", 0))
+    rows = reservation_rows_for_window(conn, d_prev, d_str, d_next, exclude_id, rev)
     occ: set[str] = set()
     for _, rd, rst, ret, pcs in rows:
         rb = reservation_bounds(str(rd), str(rst), str(ret))
@@ -410,7 +420,11 @@ def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str]
 
 
 conn = get_conn()
-init_db(conn)
+if "db_initialized" not in st.session_state:
+    init_db(conn)
+    st.session_state.db_initialized = True
+if "db_rev" not in st.session_state:
+    st.session_state.db_rev = 0
 
 if not check_login(conn):
     st.stop()
@@ -447,7 +461,7 @@ if page == "Dashboard":
         st.session_state.page_ui = "Yeni Rezervasyon"
         st.rerun()
 
-    rows = df_query(
+    rows = df_query_cached(
         conn,
         """
         SELECT status, COUNT(*) AS adet
@@ -456,6 +470,7 @@ if page == "Dashboard":
         GROUP BY status
         """,
         (selected_day.isoformat(),),
+        int(st.session_state.get("db_rev", 0)),
     )
     total = int(rows["adet"].sum()) if len(rows) else 0
     c1, c2, c3, c4 = st.columns(4)
@@ -464,7 +479,7 @@ if page == "Dashboard":
     c3.metric("Beklemede", int(rows.loc[rows["status"] == "beklemede", "adet"].sum()) if len(rows) else 0)
     c4.metric("Iptal", int(rows.loc[rows["status"] == "iptal", "adet"].sum()) if len(rows) else 0)
 
-    day_list = df_query(
+    day_list = df_query_cached(
         conn,
         """
         SELECT id, d AS "Tarih", start_time AS "Baslangic", end_time AS "Bitis",
@@ -476,6 +491,7 @@ if page == "Dashboard":
         ORDER BY start_time
         """,
         (selected_day.isoformat(),),
+        int(st.session_state.get("db_rev", 0)),
     )
     if len(day_list):
         durum_col = col_name(day_list, "Durum")
@@ -525,6 +541,7 @@ if page == "Dashboard":
                         if st.button("Evet, Sil", key=f"dash_delete_yes_{rid}", use_container_width=True, type="primary"):
                             conn.execute("DELETE FROM reservation WHERE id=?", (rid,))
                             conn.commit()
+                            st.session_state.db_rev = int(st.session_state.get("db_rev", 0)) + 1
                             st.session_state.pop(f"confirm_delete_{rid}", None)
                             st.success("Rezervasyon silindi.")
                             st.rerun()
@@ -585,6 +602,7 @@ elif page == "Yeni Rezervasyon":
                 ),
             )
             conn.commit()
+            st.session_state.db_rev = int(st.session_state.get("db_rev", 0)) + 1
             st.success("Rezervasyon eklendi.")
             st.rerun()
 
@@ -593,13 +611,15 @@ elif page == "Rezervasyon Listesi":
     q = st.text_input("Ara (musteri/telefon/masa/not)")
     status_filter = st.multiselect("Durum", ["onayli", "beklemede", "iptal"], default=["onayli", "beklemede", "iptal"])
 
-    rows = df_query(
+    rows = df_query_cached(
         conn,
         """
         SELECT id, d, start_time, end_time, customer_name, phone, people_count, table_no, status, note, created_by
         FROM reservation
         ORDER BY d DESC, start_time DESC
         """,
+        (),
+        int(st.session_state.get("db_rev", 0)),
     )
     if len(rows):
         filtered = rows.copy()
@@ -692,12 +712,14 @@ elif page == "Rezervasyon Listesi":
                     ),
                 )
                 conn.commit()
+                st.session_state.db_rev = int(st.session_state.get("db_rev", 0)) + 1
                 st.success("Rezervasyon guncellendi.")
                 st.rerun()
 
         if cancel:
             conn.execute("UPDATE reservation SET status='iptal' WHERE id=?", (int(picked_id),))
             conn.commit()
+            st.session_state.db_rev = int(st.session_state.get("db_rev", 0)) + 1
             st.success("Rezervasyon iptal olarak isaretlendi.")
             st.rerun()
     else:
@@ -708,13 +730,15 @@ elif page == "Kullanici Yonetimi":
         st.error("Bu sayfaya sadece admin erisebilir.")
     else:
         st.subheader("Kullanici Yonetimi")
-        users = df_query(
+        users = df_query_cached(
             conn,
             """
             SELECT username AS "Kullanici", role AS "Rol", created_at AS "Olusturulma"
             FROM app_user
             ORDER BY username
             """,
+            (),
+            int(st.session_state.get("db_rev", 0)),
         )
         st.dataframe(users, use_container_width=True, hide_index=True)
 
@@ -747,5 +771,6 @@ elif page == "Kullanici Yonetimi":
                         ),
                     )
                     conn.commit()
+                    st.session_state.db_rev = int(st.session_state.get("db_rev", 0)) + 1
                     st.success(f"Kullanici olusturuldu: {u}")
                     st.rerun()
