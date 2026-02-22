@@ -15,6 +15,36 @@ except Exception:
     psycopg2 = None
 
 st.set_page_config(page_title="Old School Rezervasyon", layout="wide")
+st.markdown(
+    """
+    <style>
+    .pc-legend-chip {
+      display:inline-block;
+      padding:4px 10px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:700;
+      margin-right:8px;
+      margin-bottom:6px;
+      border:1px solid transparent;
+    }
+    .pc-free { background:#ecfdf5; color:#065f46; border-color:#a7f3d0; }
+    .pc-used { background:#fef2f2; color:#991b1b; border-color:#fecaca; }
+    .pc-picked { background:#eff6ff; color:#1e3a8a; border-color:#bfdbfe; }
+    .pc-area-title {
+      font-weight:800;
+      font-size:15px;
+      margin-bottom:2px;
+    }
+    .pc-area-sub {
+      color:#4b5563;
+      font-size:12px;
+      margin-bottom:8px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 DB_PATH = Path("oldschool_reservation.db")
 DATABASE_URL = str(st.secrets.get("DATABASE_URL", os.getenv("DATABASE_URL", ""))).strip()
@@ -217,25 +247,39 @@ def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str]
     preselected = preselected or []
     selected: list[str] = []
     st.markdown("#### Bilgisayar Secimi")
-    st.caption("Dolu bilgisayarlar kilitli gorunur. Rezervasyon icin en az 1 bilgisayar sec.")
+    st.markdown(
+        "<span class='pc-legend-chip pc-free'>Bos</span>"
+        "<span class='pc-legend-chip pc-used'>Dolu (kilitli)</span>"
+        "<span class='pc-legend-chip pc-picked'>Secili</span>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Rezervasyon icin en az 1 bilgisayar sec.")
 
     for area_name, area_code, count in AREA_LAYOUT:
-        st.markdown(f"**{area_name}** ({count})")
-        cols = st.columns(8)
-        for i in range(1, count + 1):
-            pc_id = f"{area_code}-{i:02d}"
-            default_val = pc_id in preselected
-            disabled = (pc_id in occupied) and (pc_id not in preselected)
-            col = cols[(i - 1) % 8]
-            with col:
-                val = st.checkbox(
-                    pc_id,
-                    value=default_val,
-                    key=f"{key_prefix}_{pc_id}",
-                    disabled=disabled,
-                )
-            if val:
-                selected.append(pc_id)
+        area_pc_ids = [f"{area_code}-{i:02d}" for i in range(1, count + 1)]
+        area_occ = sum(1 for pc in area_pc_ids if pc in occupied and pc not in preselected)
+
+        with st.container(border=True):
+            st.markdown(f"<div class='pc-area-title'>{area_name}</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='pc-area-sub'>Toplam: {count} | Dolu: {area_occ} | Musait: {count - area_occ}</div>",
+                unsafe_allow_html=True,
+            )
+            cols = st.columns(10)
+            for i in range(1, count + 1):
+                pc_id = f"{area_code}-{i:02d}"
+                default_val = pc_id in preselected
+                disabled = (pc_id in occupied) and (pc_id not in preselected)
+                col = cols[(i - 1) % 10]
+                with col:
+                    val = st.checkbox(
+                        pc_id,
+                        value=default_val,
+                        key=f"{key_prefix}_{pc_id}",
+                        disabled=disabled,
+                    )
+                if val:
+                    selected.append(pc_id)
         st.write("")
     return sorted(selected)
 
