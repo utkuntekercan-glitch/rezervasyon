@@ -133,6 +133,16 @@ def df_query(conn, q, params=()):
     return pd.DataFrame(rows, columns=cols)
 
 
+def col_name(df: pd.DataFrame, preferred: str) -> str | None:
+    if preferred in df.columns:
+        return preferred
+    low = preferred.lower()
+    for c in df.columns:
+        if str(c).lower() == low:
+            return c
+    return None
+
+
 def status_badge(s: str) -> str:
     s = str(s).lower()
     if s == "onayli":
@@ -321,9 +331,9 @@ if page == "Dashboard":
     day_list = df_query(
         conn,
         """
-        SELECT id, d AS Tarih, start_time AS Baslangic, end_time AS Bitis,
-               customer_name AS Musteri, phone AS Telefon, people_count AS Kisi,
-               table_no AS Bilgisayarlar, status AS Durum, note AS Notlar
+        SELECT id, d AS "Tarih", start_time AS "Baslangic", end_time AS "Bitis",
+               customer_name AS "Musteri", phone AS "Telefon", people_count AS "Kisi",
+               table_no AS "Bilgisayarlar", status AS "Durum", note AS "Notlar"
         FROM reservation
         WHERE d = ?
         ORDER BY start_time
@@ -331,7 +341,9 @@ if page == "Dashboard":
         (selected_day.isoformat(),),
     )
     if len(day_list):
-        day_list["Durum"] = day_list["Durum"].apply(status_badge)
+        durum_col = col_name(day_list, "Durum")
+        if durum_col:
+            day_list[durum_col] = day_list[durum_col].apply(status_badge)
         st.dataframe(day_list, use_container_width=True, hide_index=True)
     else:
         st.info("Bu tarih icin rezervasyon yok.")
