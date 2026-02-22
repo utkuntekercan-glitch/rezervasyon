@@ -1,6 +1,7 @@
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
+import os
 
 import pandas as pd
 import streamlit as st
@@ -8,6 +9,8 @@ import streamlit as st
 st.set_page_config(page_title="Old School Rezervasyon", layout="wide")
 
 DB_PATH = Path("oldschool_reservation.db")
+APP_USER = str(st.secrets.get("APP_USER", os.getenv("APP_USER", "admin"))).strip()
+APP_PASSWORD = str(st.secrets.get("APP_PASSWORD", os.getenv("APP_PASSWORD", "123456")))
 AREA_LAYOUT = [
     ("Yellow Area", "Y", 32),
     ("EF Area", "EF", 10),
@@ -58,6 +61,31 @@ def status_badge(s: str) -> str:
     if s == "iptal":
         return "🔴 Iptal"
     return s
+
+
+def check_login() -> bool:
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return True
+
+    st.title("Old School Rezervasyon Yonetimi")
+    st.subheader("Giris Yap")
+    with st.form("login_form", clear_on_submit=False):
+        username = st.text_input("Kullanici Adi")
+        password = st.text_input("Sifre", type="password")
+        submitted = st.form_submit_button("Giris", type="primary")
+
+    st.caption("Varsayilan kullanici: admin | Varsayilan parola: 123456")
+
+    if submitted:
+        if username.strip() == APP_USER and password == APP_PASSWORD:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Hatali kullanici adi veya sifre")
+    return False
 
 
 def normalize_pc_list(raw: str | None) -> list[str]:
@@ -117,6 +145,9 @@ def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str]
         st.write("")
     return sorted(selected)
 
+
+if not check_login():
+    st.stop()
 
 st.title("Old School Rezervasyon Yonetimi")
 
