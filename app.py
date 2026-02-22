@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import os
 
@@ -149,24 +149,67 @@ def normalize_pc_list(raw: str | None) -> list[str]:
     return sorted(parts)
 
 
+def parse_hhmm(t: str) -> tuple[int, int] | None:
+    s = str(t).strip()
+    if len(s) != 5 or s[2] != ":":
+        return None
+    try:
+        hh = int(s[:2])
+        mm = int(s[3:])
+    except Exception:
+        return None
+    if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+        return None
+    return hh, mm
+
+
+def reservation_bounds(d_str: str, start_time: str, end_time: str):
+    d0 = date.fromisoformat(str(d_str))
+    st = parse_hhmm(start_time)
+    et = parse_hhmm(end_time)
+    if st is None or et is None:
+        return None
+    start_dt = datetime(d0.year, d0.month, d0.day, st[0], st[1])
+    end_dt = datetime(d0.year, d0.month, d0.day, et[0], et[1])
+    if end_dt <= start_dt:
+        end_dt += timedelta(days=1)
+    return start_dt, end_dt
+
+
+def overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
+    return a_start < b_end and b_start < a_end
+
+
 def collect_occupied_pcs(conn: DBConn, d_str: str, start_time: str, end_time: str, exclude_id: int | None = None) -> set[str]:
+    cand = reservation_bounds(d_str, start_time, end_time)
+    if cand is None:
+        return set()
+    cand_start, cand_end = cand
+    d0 = date.fromisoformat(str(d_str))
+    d_prev = (d0 - timedelta(days=1)).isoformat()
+    d_next = (d0 + timedelta(days=1)).isoformat()
+
     q = """
-        SELECT id, table_no
+        SELECT id, d, start_time, end_time, table_no
         FROM reservation
-        WHERE d = ?
+        WHERE d IN (?, ?, ?)
           AND status != 'iptal'
-          AND NOT (end_time <= ? OR start_time >= ?)
     """
-    params = [d_str, start_time, end_time]
+    params = [d_prev, d_str, d_next]
     if exclude_id is not None:
         q += " AND id != ?"
         params.append(int(exclude_id))
 
     rows = conn.execute(q, tuple(params)).fetchall()
     occ: set[str] = set()
-    for _, pcs in rows:
-        for p in normalize_pc_list(pcs):
-            occ.add(p)
+    for _, rd, rst, ret, pcs in rows:
+        rb = reservation_bounds(str(rd), str(rst), str(ret))
+        if rb is None:
+            continue
+        r_start, r_end = rb
+        if overlaps(cand_start, cand_end, r_start, r_end):
+            for p in normalize_pc_list(pcs):
+                occ.add(p)
     return occ
 
 
@@ -251,11 +294,12 @@ if page == "Dashboard":
 
 elif page == "Yeni Rezervasyon":
     st.subheader("Yeni Rezervasyon")
+    st.caption("Sabahlama icin varsayilan saatler: 22:00 - 07:00 (ertesi gun).")
     with st.form("create_reservation"):
         d = st.date_input("Tarih", value=selected_day)
         c1, c2 = st.columns(2)
-        start_time = c1.text_input("Baslangic (HH:MM)", value="19:00")
-        end_time = c2.text_input("Bitis (HH:MM)", value="21:00")
+        start_time = c1.text_input("Baslangic (HH:MM)", value="22:00")
+        end_time = c2.text_input("Bitis (HH:MM)", value="07:00")
         customer_name = st.text_input("Musteri Adi", value="")
         phone = st.text_input("Telefon", value="")
         c3, c4 = st.columns(2)
@@ -272,8 +316,8 @@ elif page == "Yeni Rezervasyon":
             st.warning("Musteri adi zorunlu.")
         elif len(selected_pcs) == 0:
             st.warning("En az 1 bilgisayar secmelisin.")
-        elif start_time.strip() >= end_time.strip():
-            st.warning("Bitis saati baslangictan sonra olmali.")
+        elif reservation_bounds(d.isoformat(), start_time.strip(), end_time.strip()) is None:
+            st.warning("Saat formati hatali. HH:MM (ornek 22:00) gir.")
         else:
             conn.execute(
                 """
@@ -365,8 +409,8 @@ elif page == "Rezervasyon Listesi":
                 st.warning("Musteri adi zorunlu.")
             elif len(eselected_pcs) == 0:
                 st.warning("En az 1 bilgisayar secmelisin.")
-            elif est.strip() >= eet.strip():
-                st.warning("Bitis saati baslangictan sonra olmali.")
+            elif reservation_bounds(ed.isoformat(), est.strip(), eet.strip()) is None:
+                st.warning("Saat formati hatali. HH:MM (ornek 22:00) gir.")
             else:
                 conn.execute(
                     """
