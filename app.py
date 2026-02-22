@@ -41,6 +41,54 @@ st.markdown(
       font-size:12px;
       margin-bottom:8px;
     }
+    .pc-grid div[data-testid="stCheckbox"] {
+      margin-bottom: 0.18rem;
+    }
+    .pc-grid div[data-testid="stCheckbox"] label {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid #a7f3d0;
+      background: #ecfdf5;
+      padding: 8px 6px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      transition: all 0.15s ease;
+      min-height: 44px;
+      cursor: pointer;
+    }
+    .pc-grid div[data-testid="stCheckbox"] label:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    }
+    .pc-grid div[data-testid="stCheckbox"] label p {
+      margin: 0;
+      width: 100%;
+      text-align: center;
+      font-weight: 700;
+      font-size: 12px;
+      color: #065f46;
+    }
+    .pc-grid div[data-testid="stCheckbox"]:has(input:checked) label {
+      background: #eff6ff;
+      border-color: #93c5fd;
+    }
+    .pc-grid div[data-testid="stCheckbox"]:has(input:checked) label p {
+      color: #1e3a8a;
+    }
+    .pc-grid div[data-testid="stCheckbox"]:has(input:disabled) label {
+      background: #fef2f2;
+      border-color: #fecaca;
+      cursor: not-allowed;
+      opacity: 0.95;
+    }
+    .pc-grid div[data-testid="stCheckbox"]:has(input:disabled) label p {
+      color: #991b1b;
+      text-decoration: line-through;
+    }
+    .pc-grid div[data-testid="stCheckbox"] input[type="checkbox"] {
+      display: none;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -264,6 +312,7 @@ def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str]
         unsafe_allow_html=True,
     )
     st.caption("Rezervasyon icin en az 1 bilgisayar sec.")
+    st.markdown("<div class='pc-grid'>", unsafe_allow_html=True)
 
     for area_name, area_code, count in AREA_LAYOUT:
         area_pc_ids = [f"{area_code}-{i:02d}" for i in range(1, count + 1)]
@@ -275,12 +324,12 @@ def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str]
                 f"<div class='pc-area-sub'>Toplam: {count} | Dolu: {area_occ} | Musait: {count - area_occ}</div>",
                 unsafe_allow_html=True,
             )
-            cols = st.columns(10)
+            cols = st.columns(6)
             for i in range(1, count + 1):
                 pc_id = f"{area_code}-{i:02d}"
                 default_val = pc_id in preselected
                 disabled = (pc_id in occupied) and (pc_id not in preselected)
-                col = cols[(i - 1) % 10]
+                col = cols[(i - 1) % 6]
                 with col:
                     val = st.checkbox(
                         pc_id,
@@ -291,6 +340,7 @@ def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str]
                 if val:
                     selected.append(pc_id)
         st.write("")
+    st.markdown("</div>", unsafe_allow_html=True)
     return sorted(selected)
 
 
