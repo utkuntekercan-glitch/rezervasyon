@@ -6,6 +6,10 @@ import os
 import pandas as pd
 import streamlit as st
 try:
+    import psycopg
+except Exception:
+    psycopg = None
+try:
     import psycopg2
 except Exception:
     psycopg2 = None
@@ -49,12 +53,18 @@ class DBConn:
 
 def get_conn():
     if DATABASE_URL:
-        if psycopg2 is None:
-            raise RuntimeError("Postgres icin psycopg2-binary gerekli. requirements'e ekleyip deploy et.")
-        if "sslmode=" in DATABASE_URL:
-            raw = psycopg2.connect(DATABASE_URL)
+        if psycopg is not None:
+            if "sslmode=" in DATABASE_URL:
+                raw = psycopg.connect(DATABASE_URL)
+            else:
+                raw = psycopg.connect(DATABASE_URL, sslmode="require")
+        elif psycopg2 is not None:
+            if "sslmode=" in DATABASE_URL:
+                raw = psycopg2.connect(DATABASE_URL)
+            else:
+                raw = psycopg2.connect(DATABASE_URL, sslmode="require")
         else:
-            raw = psycopg2.connect(DATABASE_URL, sslmode="require")
+            raise RuntimeError("Postgres driver bulunamadi. requirements'e psycopg[binary] veya psycopg2-binary ekleyin.")
         raw.autocommit = False
         return DBConn("postgres", raw)
 
