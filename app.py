@@ -305,14 +305,8 @@ def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str]
     preselected = preselected or []
     selected: list[str] = []
     st.markdown("#### Bilgisayar Secimi")
-    st.markdown(
-        "<span class='pc-legend-chip pc-free'>Bos</span>"
-        "<span class='pc-legend-chip pc-used'>Dolu (kilitli)</span>"
-        "<span class='pc-legend-chip pc-picked'>Secili</span>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("🟩 Bos   |   🟥 Dolu (kilitli)   |   🟦 Secili")
     st.caption("Rezervasyon icin en az 1 bilgisayar sec.")
-    st.markdown("<div class='pc-grid'>", unsafe_allow_html=True)
 
     for area_name, area_code, count in AREA_LAYOUT:
         area_pc_ids = [f"{area_code}-{i:02d}" for i in range(1, count + 1)]
@@ -329,10 +323,16 @@ def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str]
                 pc_id = f"{area_code}-{i:02d}"
                 default_val = pc_id in preselected
                 disabled = (pc_id in occupied) and (pc_id not in preselected)
+                if disabled:
+                    label = f"🟥 {pc_id}"
+                elif default_val:
+                    label = f"🟦 {pc_id}"
+                else:
+                    label = f"🟩 {pc_id}"
                 col = cols[(i - 1) % 6]
                 with col:
                     val = st.checkbox(
-                        pc_id,
+                        label,
                         value=default_val,
                         key=f"{key_prefix}_{pc_id}",
                         disabled=disabled,
@@ -340,7 +340,6 @@ def render_pc_picker(key_prefix: str, occupied: set[str], preselected: list[str]
                 if val:
                     selected.append(pc_id)
         st.write("")
-    st.markdown("</div>", unsafe_allow_html=True)
     return sorted(selected)
 
 
