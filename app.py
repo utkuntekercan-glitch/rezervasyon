@@ -356,10 +356,6 @@ MENU_OPTIONS = ["Dashboard", "Yeni Rezervasyon", "Rezervasyon Listesi"]
 
 if "page_ui" not in st.session_state:
     st.session_state.page_ui = "Dashboard"
-if "menu_radio" not in st.session_state:
-    st.session_state.menu_radio = st.session_state.page_ui
-if st.session_state.menu_radio != st.session_state.page_ui:
-    st.session_state.menu_radio = st.session_state.page_ui
 
 with st.sidebar:
     current_page = st.session_state.get("page_ui", "Dashboard")
@@ -367,7 +363,6 @@ with st.sidebar:
         "Menu",
         MENU_OPTIONS,
         index=MENU_OPTIONS.index(current_page) if current_page in MENU_OPTIONS else 0,
-        key="menu_radio",
     )
     if page_pick != current_page:
         st.session_state.page_ui = page_pick
@@ -380,7 +375,6 @@ if page == "Dashboard":
     st.subheader(f"{selected_day.isoformat()} Ozeti")
     if st.button("➕ Rezervasyon Ekle", type="primary"):
         st.session_state.page_ui = "Yeni Rezervasyon"
-        st.session_state.menu_radio = "Yeni Rezervasyon"
         st.rerun()
 
     rows = df_query(
@@ -445,7 +439,6 @@ if page == "Dashboard":
                     with edit_col:
                         if st.button("Duzenle", key=f"dash_edit_{rid}", use_container_width=True):
                             st.session_state.page_ui = "Rezervasyon Listesi"
-                            st.session_state.menu_radio = "Rezervasyon Listesi"
                             st.session_state.edit_reservation_id = rid
                             st.rerun()
                     with del_col:
